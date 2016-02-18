@@ -4,11 +4,26 @@ use core::{cmp, intrinsics, mem};
 use core::ops::{Index, IndexMut};
 use core::ptr;
 
-use super::paging::PAGE_END;
+use super::paging::{ VAddr, PAGE_END };
 
-pub const CLUSTER_ADDRESS: usize = PAGE_END;
+// physical memorymap at kernel startup:
+//0x000000 - 0x0004FF free
+//0x000500 - 0x004FFF memory map
+//0x005000 - 0x007BFF free
+//0x007C00 - ???????? bootloader/interrupt table/GDT
+//???????? - 0x06FFFF free
+//0x070000 - 0x072FFF boot page tables, mapping the 1st GiB to the 4th
+//0x073000 - 0x07FFFF free
+//0x080000 - 0x0FFFFF reserved, EBDA and video memory
+//0x100000 - ???????? the kernel
+//???????? - 0xEFFFFF free
+//0xF00000 - ???????? not sure what is here, read memory map
+
+
+pub const CLUSTER_ADDRESS: usize = ((PAGE_END - 1) | 0x1FFFFF) + 1;
 pub const CLUSTER_COUNT: usize = 1024 * 1024; // 4 GiB
 pub const CLUSTER_SIZE: usize = 4096; // Of 4 K chunks
+pub const CLUSTER_END: usize = CLUSTER_ADDRESS + CLUSTER_COUNT * VAddr::SIZE;
 
 /// A wrapper around raw pointers
 pub struct Memory<T> {

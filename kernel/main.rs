@@ -21,6 +21,8 @@
 #![feature(vec_push_all)]
 #![feature(zero_one)]
 #![feature(collections_range)]
+#![feature(unique)]
+#![feature(associated_consts)]
 #![no_std]
 
 #![allow(deprecated)]
@@ -40,7 +42,7 @@ use alloc::boxed::Box;
 
 use arch::context::{context_switch, Context};
 use arch::memory;
-use arch::paging::Page;
+use arch::paging::paging_init;
 use arch::regs::Regs;
 use arch::tss::TSS;
 
@@ -262,10 +264,10 @@ unsafe fn init(tss_data: usize) {
     }
 
     // Setup paging, this allows for memory allocation
-    Page::init();
+    paging_init();
     memory::cluster_init();
     // Unmap first page to catch null pointer errors (after reading memory map)
-    Page::new(0).unmap();
+    //Page::new(0).unmap();
 
     TSS_PTR = Some(&mut *(tss_data as *mut TSS));
     ENV_PTR = Some(&mut *Box::into_raw(Environment::new()));
