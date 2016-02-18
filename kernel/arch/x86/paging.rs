@@ -195,7 +195,7 @@ const INIT_PT: usize = KERNEL_BASE + INIT_PT_PHYS;
 
 const DYN_MAPPING: usize = INIT_PT + PAGE_SIZE;
 
-const PAGE_END_PHYS: usize = INIT_PT_PHYS + PAGE_SIZE;
+pub const PAGE_END_PHYS: usize = INIT_PT_PHYS + PAGE_SIZE;
 pub const PAGE_END: usize = DYN_MAPPING + PAGE_SIZE;
 // initial virtual memory will be: (add 0xC0000000 to everything)
 // !!! this assumes the kernel image is smaller then 1MiB !!!

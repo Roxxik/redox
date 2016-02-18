@@ -2,9 +2,9 @@
 
 use core::{cmp, intrinsics, mem};
 use core::ops::{Index, IndexMut};
-use core::ptr;
+use core::ptr::{ self, Unique };
 
-use super::paging::{ VAddr, PAGE_END };
+use super::paging::{ PAGE_END_PHYS, PAGE_END, PAGE_SIZE, KERNEL_BASE };
 
 // physical memorymap at kernel startup:
 //0x000000 - 0x0004FF free
@@ -18,12 +18,6 @@ use super::paging::{ VAddr, PAGE_END };
 //0x100000 - ???????? the kernel
 //???????? - 0xEFFFFF free
 //0xF00000 - ???????? not sure what is here, read memory map
-
-
-pub const CLUSTER_ADDRESS: usize = ((PAGE_END - 1) | 0x1FFFFF) + 1;
-pub const CLUSTER_COUNT: usize = 1024 * 1024; // 4 GiB
-pub const CLUSTER_SIZE: usize = 4096; // Of 4 K chunks
-pub const CLUSTER_END: usize = CLUSTER_ADDRESS + CLUSTER_COUNT * VAddr::SIZE;
 
 /// A wrapper around raw pointers
 pub struct Memory<T> {
@@ -130,14 +124,133 @@ impl<T> IndexMut<usize> for Memory<T> {
 
 /// A memory map entry
 #[repr(packed)]
-struct MemoryMapEntry {
-    base: u64,
-    len: u64,
-    class: u32,
-    acpi: u32,
+#[derive(Copy, Clone)]
+struct Cluster {
+    address: usize,
 }
 
-const MEMORY_MAP: *const MemoryMapEntry = 0x500 as *const MemoryMapEntry;
+impl Cluster {
+    const SIZE: usize = 4;
+
+
+    pub fn empty() -> Cluster {
+        Cluster { address: 0 }
+    }
+
+    pub fn unusable() -> Cluster {
+        Cluster { address: 0xFFFFFFFF }
+    }
+}
+
+// a simple block allocation map and page frame allocator
+#[repr(packed)]
+struct Clusters {
+    clusters: [Cluster; 1024 * 1024/*TODO  should be `Clusters::LENGTH` but rustc complains*/],
+}
+
+impl Clusters {
+    pub const ADDRESS: usize = ((PAGE_END - 1) | 0x1FFFFF) + 1;
+    pub const LENGTH: usize = 1024 * 1024;
+    pub const SIZE: usize = Clusters::SIZE * Cluster::SIZE;
+    pub const END: usize = Clusters::ADDRESS + Clusters::SIZE * Cluster::SIZE;
+
+    pub unsafe fn clusters() -> Unique<Clusters> {
+        Unique::new(Clusters::ADDRESS as *mut _)
+    }
+
+    pub unsafe fn get(&self, idx: usize) -> Option<&Cluster> {
+        if idx < Clusters::LENGTH {
+            Some(&self.clusters[idx])
+        } else {
+            None
+        }
+    }
+
+    pub unsafe fn get_mut(&mut self, idx: usize) -> Option<&mut Cluster> {
+        if idx < Clusters::LENGTH {
+            Some(&mut self.clusters[idx])
+        } else {
+            None
+        }
+    }
+
+    pub fn index_to_address(idx: usize) -> usize {
+        idx << 12
+    }
+
+    pub fn address_to_index(address: usize) -> usize {
+        address >> 12
+    }
+
+    pub unsafe fn init() {
+        #[repr(packed)]
+        struct MemoryMap {
+            map: [MemoryMapEntry; (0x5000 - 0x500) / 24/*TODO hould be `MemoryMap::LENGTH`, but rustc complains*/]
+        }
+
+        impl MemoryMap {
+            const ADDRESS: usize = KERNEL_BASE + 0x500;
+            const END: usize = KERNEL_BASE + 0x5000;
+            const SIZE: usize = MemoryMap::END - MemoryMap::ADDRESS;
+            const LENGTH: usize = MemoryMap::SIZE / MemoryMapEntry::SIZE;
+        }
+
+        /// A memory map entry
+        #[repr(packed)]
+        struct MemoryMapEntry {
+            base: u64,
+            len: u64,
+            class: u32,
+            acpi: u32,
+        }
+
+        impl MemoryMapEntry {
+            const SIZE: usize = 24;  // mem::sizeof::<MemoryMap>()
+        }
+
+        let mut c = Clusters::clusters();
+        let mut c = c.get_mut();
+        c.clear();
+
+        //read memory map
+        // TODO: Optimize this loop
+        let mmap = &*(MemoryMap::ADDRESS as *const MemoryMap);
+        for entry in mmap.map.iter() {
+            if entry.len > 0 && entry.class == 1 {
+                for cluster in 0..Clusters::LENGTH {
+                    let address = Clusters::index_to_address(cluster);
+                    if address as u64 >= entry.base &&
+                       (address as u64 + PAGE_SIZE as u64) <= (entry.base + entry.len) {
+                        c.clusters[cluster] = Cluster::empty();
+                    }
+                }
+            }
+        }
+
+        //reserve clusters used by Kernel, Bootloader, Pagetables and Clusters
+        //these values need to be a multiple of Cluster::SIZE
+        //TODO we could reserve way less, if we knew where exactly all those things start and end...
+        let reserved = [
+            (0x7000, 0x100000/*TODO this should be the end of the bootloader*/),
+            (0x100000, PAGE_END_PHYS /*TODO there is some free space between the kernel and the pages...*/),
+            (Clusters::ADDRESS, Clusters::END)
+        ];
+
+        for &(start, end) in reserved.iter() {
+            for i in (start / Cluster::SIZE)..(end / Cluster::SIZE) {
+                c.clusters[i] = Cluster::unusable();
+            }
+        }
+    }
+
+    unsafe fn clear(&mut self) {
+        self.clusters = [Cluster::unusable(); 1024 * 1024 /*TODO @see `struct MEmoryMap` above*/];
+    }
+}
+
+const CLUSTER_COUNT: usize = 1024 * 1024;
+const CLUSTER_ADDRESS: usize = KERNEL_BASE + 0x400000;
+const CLUSTER_SIZE: usize = 4096;
 
 /// Get the data (address) of a given cluster
 pub unsafe fn cluster(number: usize) -> usize {
@@ -171,6 +284,14 @@ pub unsafe fn cluster_to_address(number: usize) -> usize {
 
 /// Initialize clusters
 pub unsafe fn cluster_init() {
+    #[repr(packed)]
+    struct MemoryMapEntry {
+        base: u64,
+        len: u64,
+        class: u32,
+        acpi: u32,
+    }
+    const MEMORY_MAP: *const MemoryMapEntry = 0x500 as *const _;
     // First, set all clusters to the not present value
     for cluster in 0..CLUSTER_COUNT {
         set_cluster(cluster, 0xFFFFFFFF);
