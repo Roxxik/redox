@@ -1,3 +1,4 @@
+//use core::mem;
 use core::ptr::{ self, Unique };
 use core::marker::PhantomData;
 use core::ops::{ Index, IndexMut, Deref, DerefMut };
@@ -35,7 +36,12 @@ pub struct VAddr(usize);
 
 impl VAddr {
     pub const SIZE: usize = /*sizeof(usize)*/ 4;
+    const PT_OFF: usize = 12;
     const PDP_OFF: usize = 0x0; //TODO look this up
+
+    pub fn pt_entry(&self) -> usize {
+        self.0 >> Self::PT_OFF
+    }
 
     pub fn pdp_entry(&self) -> usize {
         self.0 >> Self::PDP_OFF
@@ -192,15 +198,19 @@ const PAGE_DIRECTORY_POINTER: usize = KERNEL_OFFSET + PAGE_DIRECTORY_POINTER_PHY
 const PAGE_DIRECTORY_PHYS: usize = PAGE_DIRECTORY_POINTER_PHYS + PAGE_SIZE;
 const PAGE_DIRECTORY: usize = KERNEL_OFFSET + PAGE_DIRECTORY_PHYS;
 
+//kernel mappings
+const KERNEL_PT_PHYS: usize = PAGE_DIRECTORY_PHYS + PAGE_SIZE;
+const KERNEL_PT: usize = KERNEL_OFFSET + KERNEL_PT_PHYS;
+
 //the initial statically allocated page table, all later pagetables are dynamically allocated
 //this one needs to be mapped ALL the time for the Mapper to work correctly
 //the Mapper maps all the other pagetables, when they are needed
-const INIT_PT_PHYS: usize = PAGE_DIRECTORY_PHYS + PAGE_SIZE;
-const INIT_PT: usize = KERNEL_OFFSET + INIT_PT_PHYS;
+const PAGE_PT_PHYS: usize = KERNEL_PT_PHYS + PAGE_SIZE;
+const PAGE_PT: usize = KERNEL_OFFSET + PAGE_PT_PHYS;
 
-const DYN_MAPPING: usize = INIT_PT + PAGE_SIZE;
+const DYN_MAPPING: usize = PAGE_PT + PAGE_SIZE;
 
-pub const PAGE_END_PHYS: usize = INIT_PT_PHYS + PAGE_SIZE;
+pub const PAGE_END_PHYS: usize = PAGE_PT_PHYS + PAGE_SIZE;
 pub const PAGE_END: usize = DYN_MAPPING + PAGE_SIZE;
 // initial virtual memory will be: (add 0xC0000000 to everything)
 // !!! this assumes the kernel image is smaller then 1MiB !!!
@@ -211,7 +221,7 @@ pub const PAGE_END: usize = DYN_MAPPING + PAGE_SIZE;
 
 // map all relevant kernel structures, including the kernel PD and the Mapper PT
 // the last GiB(one PD) of virtual addresses is reserved for the kernel
-pub unsafe fn paging_init() {
+pub unsafe fn paging_init(startup_end: usize) {
     //enable the kernel mapping
     let mut pdp = Unique::new(PAGE_DIRECTORY_POINTER as *mut PageTable<PDP>);
     let mut pdp = pdp.get_mut();
@@ -223,35 +233,45 @@ pub unsafe fn paging_init() {
     let mut pd = pd.get_mut();
     pd.clear();
 
-    //kernel, don't map global since this is only temporary
-    pd[0] = PageTableEntry::new(PD::LARGE_PAGE | PD::PRESENT);
-    //pt
-    pd[1] = PageTableEntry::new(INIT_PT_PHYS as u64 | PD::PRESENT);
+    //kernel
+    pd[0] = PageTableEntry::new(KERNEL_PT_PHYS as u64 | PD::PRESENT);
+    //page tables
+    pd[1] = PageTableEntry::new(PAGE_PT_PHYS as u64   | PD::PRESENT);
     //clusters
     pd[2] = PageTableEntry::new(0x400000 | PD::LARGE_PAGE | PD::GLOBAL | PD::PRESENT);
     pd[3] = PageTableEntry::new(0x600000 | PD::LARGE_PAGE | PD::GLOBAL | PD::PRESENT);
 
-    let mut pt = Unique::new(INIT_PT as *mut PageTable<PT>);
-    let mut pt = pt.get_mut();
-    pt.clear();
+    { // kernel pt
+        let mut pt = Unique::new(KERNEL_PT as *mut PageTable<PT>);
+        let mut pt = pt.get_mut();
+        pt.clear();
 
-    //map page tables
-    pt[0] = PageTableEntry::new(PAGE_DIRECTORY_POINTER_PHYS as u64 | PT::GLOBAL | PT::PRESENT);
-    pt[1] = PageTableEntry::new(PAGE_DIRECTORY_PHYS as u64         | PT::GLOBAL | PT::PRESENT);
-    pt[2] = PageTableEntry::new(INIT_PT_PHYS as u64                | PT::GLOBAL | PT::PRESENT);
-    //reserve for dynamic mappings (see paging::Mapper)
-    pt[3] = PageTableEntry::new(PT::REDOX_KERNEL_RESERVED);
+        let kernel_used = [//values here need to be page aligned
+            (STARTUP_BASE_PAGE_PHYS, startup_end),
+            (KERNEL_BASE_PHYS, PAGE_DIRECTORY_POINTER_PHYS),//map the space between kernel and pagetables too for the initial kernel stack
+        ];
+        //populate kernel pt
+        for &(start, end) in kernel_used.iter() {
+            for page_addr in (start..end).step_by(PAGE_SIZE) {
+                pt[VAddr(page_addr).pt_entry()] = PageTableEntry::new(page_addr as u64 | PT::GLOBAL | PT::PRESENT)
+            }
+        }
+    }
 
+    { // page table pt
+        let mut pt = Unique::new(PAGE_PT as *mut PageTable<PT>);
+        let mut pt = pt.get_mut();
+        pt.clear();
+
+        //map page tables
+        pt[0] = PageTableEntry::new(PAGE_DIRECTORY_POINTER_PHYS as u64 | PT::GLOBAL | PT::PRESENT);
+        pt[1] = PageTableEntry::new(PAGE_DIRECTORY_PHYS as u64         | PT::GLOBAL | PT::PRESENT);
+        pt[2] = PageTableEntry::new(KERNEL_PT_PHYS as u64              | PT::GLOBAL | PT::PRESENT);
+        pt[3] = PageTableEntry::new(PAGE_PT_PHYS as u64                | PT::GLOBAL | PT::PRESENT);
+        //reserve for dynamic mappings (see paging::Mapper)
+        pt[3] = PageTableEntry::new(PT::REDOX_KERNEL_RESERVED);
+    }
     load_cr3(PAGE_DIRECTORY_POINTER_PHYS);
-}
-
-// only map the parts of the kernel, that are actually used
-pub unsafe fn paging_init2(_startup_end: usize) {
-    bochs_break();
-    //let kernel_used = [
-    //    (STARTUP_BASE_PAGE_PHYS, startup_end),
-    //    (KERNEL_BASE_PHYS, PAGE_DIRECTORY_POINTER_PHYS),//map the space between kernel and pagetables too for initial the kernel stack
-    //];
 }
 
 //this is only valid after paging::paging_init
@@ -281,7 +301,7 @@ impl<P: PageTableType> PageTable<P> {
         //this runs faster, but is not very generic.... rework this into memset or something...
         //asm!("rep stosd"
         //    :
-        //    : "{edi}"(self as *mut _ as usize), "{ecx}"(mem::size_of::<>(PageTable) / 4), "{eax}"(0)
+        //    : "{edi}"(self as *mut _ as usize), "{ecx}"(mem::size_of::<PageTable<P>>() / 4), "{eax}"(0)
         //    : "memory"
         //    : "intel", "volatile");
     }
@@ -404,7 +424,7 @@ impl Mapper {
             None
         } else {
             //map the page
-            let mut pt = Unique::new(INIT_PT as *mut PageTable<PT>);
+            let mut pt = Unique::new(PAGE_PT as *mut PageTable<PT>);
             let mut pt = pt.get_mut();
             pt[2] = PageTableEntry::new(paddr | PT::PRESENT);
 
@@ -417,7 +437,7 @@ impl Mapper {
     //TODO check that no one is using the mapped page anymore... see TODO at Mapper
     pub unsafe fn unmap(&mut self) {
         //unmap page
-        let mut pt = Unique::new(INIT_PT as *mut PageTable<PT>);
+        let mut pt = Unique::new(PAGE_PT as *mut PageTable<PT>);
         let mut pt = pt.get_mut();
         pt[2] = PageTableEntry::new(PT::REDOX_KERNEL_RESERVED);
         //invalidate the TLB

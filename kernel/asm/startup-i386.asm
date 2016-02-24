@@ -89,7 +89,7 @@ protected_mode:
     mov eax, [high + kernel_base + 0x18]
     mov [high + interrupts.handler], eax
     mov eax, high + tss
-    mov ebx, startup_end
+    mov ebx, startup_end.page
     int 0xFF
 .lp:
     cli

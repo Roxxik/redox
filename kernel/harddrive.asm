@@ -26,6 +26,8 @@ fs_header:
 %endif
 align 512, db 0
 startup_end:
+;aligned to page
+.page equ ((startup_end - $$ + 0x7C00 - 1) | (4096 - 1)) + 1
 
 ;times (0xC000-0x1000)-0x7C00-($-$$) db 0
 

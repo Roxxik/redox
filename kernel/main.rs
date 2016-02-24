@@ -23,6 +23,7 @@
 #![feature(collections_range)]
 #![feature(unique)]
 #![feature(associated_consts)]
+#![feature(step_by)]
 #![no_std]
 
 #![allow(deprecated)]
@@ -42,7 +43,7 @@ use alloc::boxed::Box;
 
 use arch::context::{context_switch, Context};
 use arch::memory;
-use arch::paging::{ paging_init, paging_init2, bochs_break };
+use arch::paging::paging_init;
 use arch::regs::Regs;
 use arch::tss::TSS;
 
@@ -264,10 +265,8 @@ unsafe fn init(tss_data: usize, startup_end: usize) {
     }
 
     // Setup paging, this allows for memory allocation
-    paging_init();
+    paging_init(startup_end);
     memory::Clusters::init(startup_end);
-    bochs_break();
-    paging_init2(startup_end);
     // Unmap first page to catch null pointer errors (after reading memory map)
     //Page::new(0).unmap();
 

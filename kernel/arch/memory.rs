@@ -149,7 +149,7 @@ pub struct Clusters {
 }
 
 impl Clusters {
-    pub const ADDRESS: usize = ((PAGE_END - 1) | 0x1FFFFF) + 1;
+    pub const ADDRESS: usize = ((PAGE_END - 1) | (0x200000 - 1)) + 1;
     pub const LENGTH: usize = 1024 * 1024;
     pub const SIZE: usize = Clusters::LENGTH * Cluster::SIZE;
     pub const END: usize = Clusters::ADDRESS + Clusters::SIZE * Cluster::SIZE;
