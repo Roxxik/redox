@@ -8,12 +8,15 @@ pd_table equ pdp_table + 0x1000
 ; setting up Page Tables
     cli
 
+    ; not trusting bios calls to let 32Bit addressing enabled
+    call unreal
+
     ; clearing page tables
     xor eax, eax
     mov edi, pdp_table
     mov ecx, 2 * 4096 / 4 ;PDP, PD / moves 4 Bytes at once
     cld
-    rep stosd
+    a32 rep stosd
 
     ; Mapping first and 4th GiB of virt. mem to first Gib of phys. mem
     mov edi, pdp_table

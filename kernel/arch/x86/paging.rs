@@ -207,19 +207,16 @@ pub const PAGE_END: usize = DYN_MAPPING + PAGE_SIZE;
 // map all relevant kernel structures, including the kernel PD and the Mapper PT
 // the last GiB(one PD) of virtual addresses is reserved for the kernel
 pub unsafe fn paging_init() {
-    bochs_break();
     //enable the kernel mapping
     let mut pdp = Unique::new(PAGE_DIRECTORY_POINTER as *mut PageTable<PDP>);
     let mut pdp = pdp.get_mut();
     pdp.clear();
-    bochs_break();
 
     pdp[3] = PageTableEntry::new(PAGE_DIRECTORY_PHYS as u64 | PDP::PRESENT);
 
     let mut pd = Unique::new(PAGE_DIRECTORY as *mut PageTable<PD>);
     let mut pd = pd.get_mut();
     pd.clear();
-    bochs_break();
 
     //kernel, don't map global since this is only temporary
     pd[0] = PageTableEntry::new(PD::LARGE_PAGE | PD::PRESENT);
@@ -232,7 +229,6 @@ pub unsafe fn paging_init() {
     let mut pt = Unique::new(INIT_PT as *mut PageTable<PT>);
     let mut pt = pt.get_mut();
     pt.clear();
-    bochs_break();
 
     //map page tables
     pt[0] = PageTableEntry::new(PAGE_DIRECTORY_POINTER_PHYS as u64 | PT::GLOBAL | PT::PRESENT);
@@ -241,8 +237,6 @@ pub unsafe fn paging_init() {
     //reserve for dynamic mappings (see paging::Mapper)
     pt[3] = PageTableEntry::new(PT::REDOX_KERNEL_RESERVED);
 
-
-    bochs_break();
     load_cr3(PAGE_DIRECTORY_POINTER_PHYS);
 }
 
@@ -268,11 +262,12 @@ impl<P: PageTableType> PageTable<P> {
     //}
 
     pub unsafe fn clear(&mut self) {
+        //TODO this is highly inefficient, will created an array on stack and then copy it to the struct's mem
         self.entries = [PageTableEntry::empty(); PAGE_TABLE_LENGTH];
         //this runs faster, but is not very generic.... rework this into memset or something...
         //asm!("rep stosd"
         //    :
-        //    : "{edi}"(self as *mut _ as usize), "{ecx}"(PAGE_TABLE_LENGTH / 4), "{eax}"(0)
+        //    : "{edi}"(self as *mut _ as usize), "{ecx}"(mem::size_of::<>(PageTable) / 4), "{eax}"(0)
         //    : "memory"
         //    : "intel", "volatile");
     }

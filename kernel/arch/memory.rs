@@ -4,7 +4,7 @@ use core::{cmp, intrinsics, mem};
 use core::ops::{Index, IndexMut};
 use core::ptr::{ self, Unique };
 
-use super::paging::{ PAGE_END_PHYS, PAGE_END, PAGE_SIZE, KERNEL_BASE };
+use super::paging::{ PAGE_END_PHYS, PAGE_END, PAGE_SIZE, KERNEL_BASE, bochs_break };
 
 // physical memorymap at kernel startup:
 //0x000000 - 0x0004FF free
@@ -125,7 +125,7 @@ impl<T> IndexMut<usize> for Memory<T> {
 /// A memory map entry
 #[repr(packed)]
 #[derive(Copy, Clone)]
-struct Cluster {
+pub struct Cluster {
     address: usize,
 }
 
@@ -144,14 +144,14 @@ impl Cluster {
 
 // a simple block allocation map and page frame allocator
 #[repr(packed)]
-struct Clusters {
+pub struct Clusters {
     clusters: [Cluster; 1024 * 1024/*TODO  should be `Clusters::LENGTH` but rustc complains*/],
 }
 
 impl Clusters {
     pub const ADDRESS: usize = ((PAGE_END - 1) | 0x1FFFFF) + 1;
     pub const LENGTH: usize = 1024 * 1024;
-    pub const SIZE: usize = Clusters::SIZE * Cluster::SIZE;
+    pub const SIZE: usize = Clusters::LENGTH * Cluster::SIZE;
     pub const END: usize = Clusters::ADDRESS + Clusters::SIZE * Cluster::SIZE;
 
     pub unsafe fn clusters() -> Unique<Clusters> {
@@ -212,8 +212,9 @@ impl Clusters {
         let mut c = c.get_mut();
         c.clear();
 
+
         //read memory map
-        // TODO: Optimize this loop
+        // TODO: Optimize this loop // boottime optimisations are not worth as much effort as runtime optimisations
         let mmap = &*(MemoryMap::ADDRESS as *const MemoryMap);
         for entry in mmap.map.iter() {
             if entry.len > 0 && entry.class == 1 {
@@ -233,18 +234,27 @@ impl Clusters {
         let reserved = [
             (0x7000, 0x100000/*TODO this should be the end of the bootloader*/),
             (0x100000, PAGE_END_PHYS /*TODO there is some free space between the kernel and the pages...*/),
+            //don't forget kernel stack starting at 0x1fff80, growing downwards
             (Clusters::ADDRESS, Clusters::END)
         ];
 
         for &(start, end) in reserved.iter() {
-            for i in (start / Cluster::SIZE)..(end / Cluster::SIZE) {
+            for i in Clusters::address_to_index(start)..Clusters::address_to_index(end) {
                 c.clusters[i] = Cluster::unusable();
             }
         }
     }
 
     unsafe fn clear(&mut self) {
-        self.clusters = [Cluster::unusable(); 1024 * 1024 /*TODO @see `struct MEmoryMap` above*/];
+        //self.clusters = [Cluster::unusable(); 1024 * 1024 /*TODO @see `struct MEmoryMap` above*/];
+        //this needs so much stack space, that it'll explode everything, thats why some assembly is used here
+        //TODO find a way to resonably clear memory, without assembly
+        //self.clusters = [Cluster::unusable(); 1024 * 1024];
+        asm!("rep stosd"
+            :
+            : "{edi}"(self as *mut _ as usize), "{ecx}"(Clusters::LENGTH), "{eax}"(Cluster::unusable())
+            : "memory"
+            : "intel", "volatile");
     }
 }
 
