@@ -1,7 +1,8 @@
 ENTRY(kernel)
 
 SECTIONS {
-    kernel_image = 0xC0100000;
+    kernel_offset = 0xC0000000;
+    kernel_image = 0x100000 + kernel_offset;
     kernel_base = kernel_image + 0x1000;
 	. = kernel_base;
 

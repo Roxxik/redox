@@ -4,7 +4,7 @@ use core::{cmp, intrinsics, mem};
 use core::ops::{Index, IndexMut};
 use core::ptr::{ self, Unique };
 
-use super::paging::{ PAGE_END_PHYS, PAGE_END, PAGE_SIZE, KERNEL_BASE, bochs_break };
+use super::paging::{ PAGE_END_PHYS, PAGE_END, PAGE_SIZE, KERNEL_OFFSET, STARTUP_BASE_PAGE_PHYS, KERNEL_BASE_PHYS };
 
 // physical memorymap at kernel startup:
 //0x000000 - 0x0004FF free
@@ -182,15 +182,15 @@ impl Clusters {
         address >> 12
     }
 
-    pub unsafe fn init() {
+    pub unsafe fn init(startup_end: usize) {
         #[repr(packed)]
         struct MemoryMap {
             map: [MemoryMapEntry; (0x5000 - 0x500) / 24/*TODO hould be `MemoryMap::LENGTH`, but rustc complains*/]
         }
 
         impl MemoryMap {
-            const ADDRESS: usize = KERNEL_BASE + 0x500;
-            const END: usize = KERNEL_BASE + 0x5000;
+            const ADDRESS: usize = KERNEL_OFFSET + 0x500;
+            const END: usize = KERNEL_OFFSET + 0x5000;
             const SIZE: usize = MemoryMap::END - MemoryMap::ADDRESS;
             const LENGTH: usize = MemoryMap::SIZE / MemoryMapEntry::SIZE;
         }
@@ -232,10 +232,9 @@ impl Clusters {
         //these values need to be a multiple of Cluster::SIZE
         //TODO we could reserve way less, if we knew where exactly all those things start and end...
         let reserved = [
-            (0x7000, 0x100000/*TODO this should be the end of the bootloader*/),
-            (0x100000, PAGE_END_PHYS /*TODO there is some free space between the kernel and the pages...*/),
-            //don't forget kernel stack starting at 0x1fff80, growing downwards
-            (Clusters::ADDRESS, Clusters::END)
+            (STARTUP_BASE_PAGE_PHYS, startup_end),//TODO this should be the end of the bootloader
+            (KERNEL_BASE_PHYS, PAGE_END_PHYS),//TODO there is some free space between the kernel and the pages...don't forget kernel stack starting at 0x1fff80, growing downwards
+            (Clusters::ADDRESS, Clusters::END),
         ];
 
         for &(start, end) in reserved.iter() {
@@ -259,7 +258,7 @@ impl Clusters {
 }
 
 const CLUSTER_COUNT: usize = 1024 * 1024;
-const CLUSTER_ADDRESS: usize = KERNEL_BASE + 0x400000;
+const CLUSTER_ADDRESS: usize = KERNEL_OFFSET + 0x400000;
 const CLUSTER_SIZE: usize = 4096;
 
 /// Get the data (address) of a given cluster

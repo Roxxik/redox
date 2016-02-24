@@ -176,22 +176,27 @@ impl Into<Unique<PageTable<PDP>>> for CR3 {
 
 
 
-pub const KERNEL_BASE: usize = 0xC0000000;
+pub const KERNEL_OFFSET: usize = 0xC0000000;
+
+const STARTUP_BASE_PHYS: usize = 0x7C00;
+pub const STARTUP_BASE_PAGE_PHYS: usize = STARTUP_BASE_PHYS & !(PAGE_SIZE - 1);
+pub const KERNEL_BASE_PHYS: usize = 0x100000;
+const KERNEL_BASE: usize = KERNEL_OFFSET + KERNEL_BASE_PHYS;
 pub const PAGE_SIZE: usize = 4096;
 
 //the page directory pointer used by kernel processes (kidle / kevent...)
 const PAGE_DIRECTORY_POINTER_PHYS: usize = 0x200000;
-const PAGE_DIRECTORY_POINTER: usize = KERNEL_BASE + PAGE_DIRECTORY_POINTER_PHYS;
+const PAGE_DIRECTORY_POINTER: usize = KERNEL_OFFSET + PAGE_DIRECTORY_POINTER_PHYS;
 
 //the page directory containing ALL kernel pages
 const PAGE_DIRECTORY_PHYS: usize = PAGE_DIRECTORY_POINTER_PHYS + PAGE_SIZE;
-const PAGE_DIRECTORY: usize = KERNEL_BASE + PAGE_DIRECTORY_PHYS;
+const PAGE_DIRECTORY: usize = KERNEL_OFFSET + PAGE_DIRECTORY_PHYS;
 
 //the initial statically allocated page table, all later pagetables are dynamically allocated
 //this one needs to be mapped ALL the time for the Mapper to work correctly
 //the Mapper maps all the other pagetables, when they are needed
 const INIT_PT_PHYS: usize = PAGE_DIRECTORY_PHYS + PAGE_SIZE;
-const INIT_PT: usize = KERNEL_BASE + INIT_PT_PHYS;
+const INIT_PT: usize = KERNEL_OFFSET + INIT_PT_PHYS;
 
 const DYN_MAPPING: usize = INIT_PT + PAGE_SIZE;
 
@@ -238,6 +243,15 @@ pub unsafe fn paging_init() {
     pt[3] = PageTableEntry::new(PT::REDOX_KERNEL_RESERVED);
 
     load_cr3(PAGE_DIRECTORY_POINTER_PHYS);
+}
+
+// only map the parts of the kernel, that are actually used
+pub unsafe fn paging_init2(_startup_end: usize) {
+    bochs_break();
+    //let kernel_used = [
+    //    (STARTUP_BASE_PAGE_PHYS, startup_end),
+    //    (KERNEL_BASE_PHYS, PAGE_DIRECTORY_POINTER_PHYS),//map the space between kernel and pagetables too for initial the kernel stack
+    //];
 }
 
 //this is only valid after paging::paging_init

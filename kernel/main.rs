@@ -42,7 +42,7 @@ use alloc::boxed::Box;
 
 use arch::context::{context_switch, Context};
 use arch::memory;
-use arch::paging::{ paging_init, bochs_break };
+use arch::paging::{ paging_init, paging_init2, bochs_break };
 use arch::regs::Regs;
 use arch::tss::TSS;
 
@@ -239,7 +239,7 @@ static BSS_TEST_ZERO: usize = 0;
 static BSS_TEST_NONZERO: usize = usize::MAX;
 
 /// Initialize kernel
-unsafe fn init(tss_data: usize) {
+unsafe fn init(tss_data: usize, startup_end: usize) {
 
     // Test
     assume!(true);
@@ -265,9 +265,9 @@ unsafe fn init(tss_data: usize) {
 
     // Setup paging, this allows for memory allocation
     paging_init();
+    memory::Clusters::init(startup_end);
     bochs_break();
-    memory::Clusters::init();
-    //memory::cluster_init();
+    paging_init2(startup_end);
     // Unmap first page to catch null pointer errors (after reading memory map)
     //Page::new(0).unmap();
 
@@ -434,7 +434,7 @@ pub extern "cdecl" fn kernel(interrupt: usize, mut regs: &mut Regs) {
         0x80 => syscall_handle(regs),
         0xFF => {
             unsafe {
-                init(regs.ax);
+                init(regs.ax, regs.bx);
                 idle_loop();
             }
         },
