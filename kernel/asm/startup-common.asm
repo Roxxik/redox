@@ -54,9 +54,12 @@ kernel_base equ 0x100000
 
     ; load the part of the kernel that does not fill the buffer completely
     mov cx, kernel_file.length_sectors % buffer_size_sectors
+
+    ; TODO replace conditional jump by conditional compilation
     test cx, cx
     jz finished_loading ; if cx = 0 => skip
 
+    ; fill buffer partly
     mov bx, startup_end
     mov dx, 0x0
     call load

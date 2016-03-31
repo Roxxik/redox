@@ -1,21 +1,56 @@
 %include "asm/startup-common.asm"
 
 startup_arch:
-    ; load protected mode GDT and IDT
+pdp_table equ 0x70000
+pd_table equ pdp_table + 0x1000
+
+; setting up Page Tables
     cli
+
+    ; clearing page tables
+    xor eax, eax
+    mov edi, pdp_table
+    mov ecx, 2 * 4096 / 4 ;PDP, PD
+    cld
+    a32 rep stosd ; moves 4 Bytes at once
+
+    ; Mapping first GiB of virt. mem to first Gib of phys. mem
+    mov edi, pdp_table
+    ;Link first PDPE to PD
+    mov DWORD [edi + 0 * 8], pd_table | 1 ; maps first GiB
+    add edi, 0x1000
+    ;Link all PDEs(each 2MiB) to the first GiB
+    mov ebx, 1 << 7 | 1 << 1 | 1 ; large page, writable, present, don't enable global pages yet, this is only a temporary mapping
+    mov ecx, 512
+.setpd:
+    mov [edi], ebx
+    add ebx, 0x200000
+    add edi, 8
+    loop .setpd
+
+    ; cr3 holds pointer to PDP
+    mov eax, pdp_table
+    mov cr3, eax
+
+    ; enable Page Global Extension and Page Address Extension and Page Size Extension and Page
+    ; PAE needs at least i686(P6)
+    mov eax, cr4
+    or eax, 1 << 7 | 1 << 5 | 1 << 4
+    mov cr4, eax
+
+    ; load low protected mode GDT
     lgdt [gdtr]
-    lidt [idtr]
-    ; set protected mode bit of cr0
+
+    ; set paging and protected mode bit of cr0
     mov eax, cr0
-    or eax, 1
+    or eax, 1 << 31 | 1
     mov cr0, eax
 
-    ; far jump to load CS with 32 bit segment
-    jmp gdt.kernel_code:protected_mode
+    ; far jump loads CS with 32 bit segments
+    jmp DWORD gdt.kernel_code:protected_mode
 
 USE32
 protected_mode:
-
     ; load all the other segments with 32 bit data segments
     mov eax, gdt.kernel_data
     mov ds, eax
@@ -24,8 +59,18 @@ protected_mode:
     mov gs, eax
     mov ss, eax
 
+    ; setup stack
     mov esp, 0x200000 - 128
 
+    ; reload TLB
+    mov eax, cr3
+    mov cr3, eax
+
+    ; load protected mode GDT and IDT
+    lidt [idtr]
+    lgdt [gdtr]
+
+    ; load task register
     mov eax, gdt.tss
     ltr ax
 
@@ -33,9 +78,9 @@ protected_mode:
     mov eax, [kernel_base + 0x18]
     mov [interrupts.handler], eax
     mov eax, tss
-    int 255
+    int 0xFF
 .lp:
-    sti
+    cli
     hlt
     jmp .lp
 
@@ -90,11 +135,11 @@ gdt:
 .tss equ $ - gdt
     istruc GDTEntry
         at GDTEntry.limitl, dw (tss.end - tss) & 0xFFFF
-        at GDTEntry.basel, dw (tss-$$+0x7C00) & 0xFFFF
-        at GDTEntry.basem, db ((tss-$$+0x7C00) >> 16) & 0xFF
+        at GDTEntry.basel, dw (tss - $$ + 0x7C00) & 0xFFFF
+        at GDTEntry.basem, db ((tss - $$ + 0x7C00) >> 16) & 0xFF
         at GDTEntry.attribute, db attrib.present | attrib.ring3 | attrib.tssAvailabe32
         at GDTEntry.flags__limith, db ((tss.end - tss) >> 16) & 0xF
-        at GDTEntry.baseh, db ((tss-$$+0x7C00) >> 24) & 0xFF
+        at GDTEntry.baseh, db ((tss - $$ + 0x7C00) >> 24) & 0xFF
     iend
 .end equ $ - gdt
 
@@ -102,7 +147,7 @@ struc TSS
     .prev_tss resd 1    ;The previous TSS - if we used hardware task switching this would form a linked list.
     .esp0 resd 1        ;The stack pointer to load when we change to kernel mode.
     .ss0 resd 1         ;The stack segment to load when we change to kernel mode.
-    .esp1 resd 1        ;everything below here is unused now..
+    .esp1 resd 1        ;everything below here is unusued now..
     .ss1 resd 1
     .esp2 resd 1
     .ss2 resd 1
